@@ -49,11 +49,13 @@ import torch
 import logging
 
 # Speechbrain path
-sys.path.append("../../../..")
+sys.path.append("../../../../")
 import speechbrain as sb
 from speechbrain.utils.distributed import run_on_main
 from hyperpyyaml import load_hyperpyyaml
 from pathlib import Path
+
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 sys.path.append("../../../LibriSpeech/ASR/seq2seq")
 
@@ -92,7 +94,49 @@ class ASR(sb.Brain):
                 return p_seq, wav_lens
         else:
             p_tokens, scores = self.hparams.search(feats, wav_lens)
-            return p_seq, wav_lens, p_tokens
+            #p_tokens = p_tokens[0]
+            #scores = scores[0]
+            #print(f"{len(p_tokens), scores}")
+            
+            lmb = 0.01
+            batch_best_tokens = []
+            # github.com/huggingface/transformers/issues/1009
+            # batch loop
+            for j in range(len(scores)):
+            #for token_candidates, score_candidates in zip(p_tokens, scores):
+                best_score = None
+                best_tokens = None
+                # topk loop
+                for k in range(len(p_tokens)):
+                #for utt_seq, utt_score in zip(token_candidates, score_candidates):
+                    utt_seq = p_tokens[k][j]
+                    utt_score = scores[j][k]
+                    decoded = "".join(self.tokenizer.decode_ndim(utt_seq)).lower()
+                    #print(decoded)
+                    input_ids = torch.tensor(gpt_tokenizer.encode(decoded)).unsqueeze(0)
+                    tokenize_input = gpt_tokenizer.tokenize(decoded)
+                    tensor_input = torch.tensor([[gpt_tokenizer.eos_token_id] + gpt_tokenizer.convert_tokens_to_ids(tokenize_input)])
+                    with torch.no_grad():
+                        outputs = gpt_model(tensor_input, labels=tensor_input)
+                        loss, logits = outputs[:2]
+                    
+                    lp = 0.0
+                    for i in range(len(tokenize_input)):
+                        masked_index = i
+                        predicted_score = logits[0, masked_index]
+                        predicted_prob = self.hparams.log_softmax(predicted_score)
+                        lp += predicted_prob[gpt_tokenizer.convert_tokens_to_ids([tokenize_input[i]])[0]]
+
+                    fusion_score = utt_score + lmb * lp
+                    if best_score is None or fusion_score > best_score:
+                        best_score = fusion_score
+                        best_tokens = utt_seq
+                    #print(f'Decoded: {decoded}')
+                    #print(f"b: {lp}")
+ 
+                batch_best_tokens.append(best_tokens)
+                #print(f'Best tokens: {"".join(self.tokenizer.decode_ndim(best_tokens))}')
+            return p_seq, wav_lens, batch_best_tokens
 
     def compute_objectives(self, predictions, batch, stage):
         """Computes the loss (CTC+NLL) given predictions and targets."""
@@ -298,6 +342,10 @@ def dataio_prepare(hparams):
 
 
 if __name__ == "__main__":
+
+    # Set up GPT
+    gpt_model = GPT2LMHeadModel.from_pretrained("gpt2")
+    gpt_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
     # CLI:
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])

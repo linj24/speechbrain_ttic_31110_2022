@@ -147,3 +147,4 @@ dmypy.json
 # Data folders
 **/wav2vec_data/
 **/wav2vec_output/
+**/*_output/

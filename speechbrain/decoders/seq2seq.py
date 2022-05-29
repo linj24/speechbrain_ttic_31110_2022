@@ -7,6 +7,7 @@ Authors
  * Sung-Lin Yeh 2020
 """
 import torch
+import numpy as np
 
 import speechbrain as sb
 from speechbrain.decoders.ctc import CTCPrefixScorer
@@ -812,10 +813,10 @@ class S2SBeamSearcher(S2SBaseSearcher):
             log_probs,
         ) = self._get_top_score_prediction(hyps_and_scores, topk=self.topk,)
         # pick the best hyp
-        predictions = topk_hyps[:, 0, :]
-        predictions = batch_filter_seq2seq_output(
-            predictions, eos_id=self.eos_index
-        )
+        # predictions = topk_hyps[:, 0, :]
+        predictions = [batch_filter_seq2seq_output(
+            topk_hyps[:, i, :], eos_id=self.eos_index
+        ) for i in range(self.topk)]
 
         if self.return_log_probs:
             return predictions, topk_scores, log_probs
